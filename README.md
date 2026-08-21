@@ -33,8 +33,13 @@ Hooks:
 
 - GitHub `push` → `POST /hook/github` (`X-Hub-Signature-256`)
 - GitLawb `push` → `POST /hook/gitlawb` (`X-Gitlawb-Signature-256`)
-- Forgejo HTTP → `POST /hook/forgejo` (`X-Forgejo-Signature`)
-- Forgejo same-host → `hooks/post-receive.sh` → `POST /hook`
+- Forgejo HTTP webhook → `POST /hook/forgejo` (`X-Forgejo-Signature`)
+- Forgejo same-host (bare-metal) → `hooks/post-receive.sh` → `POST /hook`
+
+Containerized Forgejo: the filesystem `post-receive.sh` path does NOT work —
+Forgejo chains its own internal hook and the container usually lacks `curl`
+(the script silently exits 127). Registers a Forgejo **push webhook** instead
+(`POST /hook/forgejo`, secret = `FJ_HOOK_SECRET`); that is the working path.
 
 Deploy next to Forgejo. Empty `gitlawb` URL is fine until that remote exists; GitHub and GitLawb remotes are skipped when unset.
 

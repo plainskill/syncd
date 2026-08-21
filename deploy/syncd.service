@@ -5,11 +5,18 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=git
-Group=git
+User=syncd
+Group=syncd
 UMask=0077
 WorkingDirectory=/var/lib/syncd
-# /etc/syncd.yaml holds a Forgejo write token and hook secrets.
+# Non-secret runtime config lives in /etc/syncd.env; secrets are also read from
+# here (FORGEJO_TOKEN + hook secrets referenced by the config's ${VAR} syntax).
+EnvironmentFile=/etc/syncd.env
+# GitLawb remote helper. syncd injects its own hardened GIT_SSH_COMMAND
+# internally, so it is NOT set here.
+Environment=GITLAWB_NODE=https://gl.plainskill.net
+Environment=GITLAWB_KEY=/var/lib/syncd/.gitlawb/identity.pem
+# /etc/syncd.yaml holds the Forgejo write token and hook secrets.
 ExecStartPre=/usr/bin/chmod 0600 /etc/syncd.yaml
 ExecStart=/usr/local/bin/syncd -config /etc/syncd.yaml
 Restart=always

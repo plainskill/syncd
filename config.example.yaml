@@ -1,3 +1,6 @@
+# Bind address. On a box where syncd runs next to Forgejo inside a Docker
+# bridge, bind the host's bridge gateway (e.g. 172.21.0.1) so the container can
+# reach it; bind 127.0.0.1 if Forgejo is on the same host without that network.
 listen: "127.0.0.1:7744"
 hub_root: /var/lib/syncd/hubs
 sqlite: /var/lib/syncd/syncd.db
@@ -13,15 +16,33 @@ bot:
   forgejo: syncd
   gitlawb: "" # DID the daemon pushes as, if known
 
+# One entry per repo to mirror. All platforms are optional except forgejo
+# (which is canonical). An empty github/gitlawb URL skips that remote.
+# IMPORTANT: when syncd runs on the SAME host as Forgejo, use the local SSH
+# address (ssh://git@127.0.0.1:2222/...) for the forgejo remote — the public
+# DNS name resolves to the router's external IP and hairpin NAT back to the
+# box may not work.
 repos:
   - name: LibreLoom/LibreServ
     default_branch: main
-    forgejo: ssh://git@gt.plainskill.net:2222/LibreLoom/LibreServ.git
+    forgejo: ssh://git@127.0.0.1:2222/LibreLoom/LibreServ.git
     github: git@github.com:LibreLoom/LibreServ.git
-    gitlawb: "" # gitlawb://… or https://node…/owner/repo.git
+    gitlawb: gitlawb://did:key:<GITLAWB_OWNER_DID>/LibreServ
     forgejo_api: https://gt.plainskill.net
     forgejo_token: ${FORGEJO_TOKEN}
     # All hook secrets are required. Empty values are rejected (401).
+    secrets:
+      github: ${GITHUB_HOOK_SECRET}
+      forgejo: ${FJ_HOOK_SECRET}
+      gitlawb: ${GITLAWB_HOOK_SECRET}
+
+  - name: LibreLoom/PolyLibre
+    default_branch: main
+    forgejo: ssh://git@127.0.0.1:2222/LibreLoom/PolyLibre.git
+    github: git@github.com:LibreLoom/PolyLibre.git
+    gitlawb: gitlawb://did:key:<GITLAWB_OWNER_DID>/PolyLibre
+    forgejo_api: https://gt.plainskill.net
+    forgejo_token: ${FORGEJO_TOKEN}
     secrets:
       github: ${GITHUB_HOOK_SECRET}
       forgejo: ${FJ_HOOK_SECRET}
