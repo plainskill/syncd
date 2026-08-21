@@ -15,6 +15,7 @@ import (
 	"syncd/internal/fanout"
 	"syncd/internal/hook"
 	"syncd/internal/journal"
+	"syncd/internal/single"
 )
 
 func main() {
@@ -60,7 +61,21 @@ func main() {
 		}
 	}, log)
 
-	srv := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{
+		Addr:              cfg.Listen,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	lk, err := single.Acquire(cfg.HubRoot)
+	if err != nil {
+		log.Error("instance lock", "err", err)
+		os.Exit(1)
+	}
+	defer lk.Close()
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

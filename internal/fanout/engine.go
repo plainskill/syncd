@@ -18,13 +18,13 @@ import (
 )
 
 type Git interface {
-	Ensure(remotes map[string]string) error
-	Fetch(remote, ref string) error
-	SHA(remote, ref string) (string, error)
-	IsAncestor(ancestor, descendant string) (bool, error)
-	Merge(ours, theirs, msg string) (sha string, conflict bool, err error)
-	Push(remote, ref, sha string) error
-	LSRemote(remote, glob string) (map[string]string, error)
+	Ensure(ctx context.Context, remotes map[string]string) error
+	Fetch(ctx context.Context, remote, ref string) error
+	SHA(ctx context.Context, remote, ref string) (string, error)
+	IsAncestor(ctx context.Context, ancestor, descendant string) (bool, error)
+	Merge(ctx context.Context, ours, theirs, msg string) (sha string, conflict bool, err error)
+	Push(ctx context.Context, remote, ref, sha string) error
+	LSRemote(ctx context.Context, remote, glob string) (map[string]string, error)
 }
 
 type PRs interface {
@@ -57,12 +57,14 @@ func NewEngine(cfg *config.Config, j *journal.DB, log *slog.Logger) *Engine {
 	}
 	e.NewGit = func(r config.Repo) Git {
 		safe := strings.ReplaceAll(r.Name, "/", "-")
-		return gitops.New(
+		g := gitops.New(
 			filepath.Join(cfg.HubRoot, safe+".git"),
 			filepath.Join(cfg.HubRoot, "worktrees", safe),
 			cfg.Bot.Name,
 			cfg.Bot.Email,
 		)
+		g.Timeout = cfg.GitTimeout
+		return g
 	}
 	e.NewPR = func(r config.Repo) PRs {
 		return forgejo.New(r.ForgejoAPI, r.ForgejoToken)
@@ -102,19 +104,22 @@ func (e *Engine) Run(ctx context.Context) {
 	defer tick.Stop()
 	e.Wake()
 	for {
-		e.drain()
+		e.drain(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-e.wake:
 		case <-tick.C:
-			e.Reconcile()
+			e.Reconcile(ctx)
 		}
 	}
 }
 
-func (e *Engine) drain() {
+func (e *Engine) drain(ctx context.Context) {
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		j, err := e.J.NextIncomplete(e.Cfg.MaxAttempts)
 		if err != nil {
 			e.Log.Error("journal next", "err", err)
@@ -123,13 +128,14 @@ func (e *Engine) drain() {
 		if j == nil {
 			return
 		}
-		if err := e.Apply(j); err != nil {
+		if err := e.Apply(ctx, j); err != nil {
 			e.Log.Error("apply", "err", err, "repo", j.Repo, "ref", j.Ref, "sha", j.SHA)
 			_ = e.J.BumpAttempt(j.ID, err.Error())
 			if j.Attempts+1 >= e.Cfg.MaxAttempts {
 				_ = e.J.MarkFailed(j.ID, err.Error())
 			}
-			return
+			// Do not stall the rest of the queue on a hung remote.
+			continue
 		}
 	}
 }
@@ -147,7 +153,7 @@ func (e *Engine) lockRef(repo, ref string) func() {
 	return l.Unlock
 }
 
-func (e *Engine) Apply(j *journal.Job) error {
+func (e *Engine) Apply(ctx context.Context, j *journal.Job) error {
 	unlock := e.lockRef(j.Repo, j.Ref)
 	defer unlock()
 
@@ -156,7 +162,7 @@ func (e *Engine) Apply(j *journal.Job) error {
 		return e.J.MarkDone(j.ID)
 	}
 	g := e.NewGit(repo)
-	if err := g.Ensure(map[string]string{
+	if err := g.Ensure(ctx, map[string]string{
 		"forgejo": repo.Forgejo,
 		"github":  repo.GitHub,
 		"gitlawb": repo.GitLawb,
@@ -164,21 +170,21 @@ func (e *Engine) Apply(j *journal.Job) error {
 		return err
 	}
 
-	if err := e.fetch(g, repo, j.Source, j.Ref); err != nil {
+	if err := e.fetch(ctx, g, repo, j.Source, j.Ref); err != nil {
 		return err
 	}
-	if err := e.fetch(g, repo, "forgejo", j.Ref); err != nil {
+	if err := e.fetch(ctx, g, repo, "forgejo", j.Ref); err != nil {
 		return err
 	}
 	_ = e.J.MarkFetched(j.ID)
 
-	fj, _ := g.SHA("forgejo", j.Ref)
+	fj, _ := g.SHA(ctx, "forgejo", j.Ref)
 	in := j.SHA
 
 	if blk, err := e.J.Blocked(j.Repo, j.Ref); err != nil {
 		return err
 	} else if blk != nil {
-		resolved, err := e.blockedResolved(g, fj, blk)
+		resolved, err := e.blockedResolved(ctx, g, fj, blk)
 		if err != nil {
 			return err
 		}
@@ -187,18 +193,18 @@ func (e *Engine) Apply(j *journal.Job) error {
 			if err := e.J.Unblock(j.Repo, j.Ref); err != nil {
 				return err
 			}
-			return e.pushTarget(j, repo, g, fj, true)
+			return e.pushTarget(ctx, j, repo, g, fj, true)
 		}
 		if j.Source != "forgejo" {
 			return e.J.MarkConflict(j.ID, fmt.Sprintf("blocked on pr %d", blk.PR))
 		}
 	}
 
-	fjAncIn, err := g.IsAncestor(fj, in)
+	fjAncIn, err := g.IsAncestor(ctx, fj, in)
 	if err != nil {
 		return err
 	}
-	inAncFj, err := g.IsAncestor(in, fj)
+	inAncFj, err := g.IsAncestor(ctx, in, fj)
 	if err != nil {
 		return err
 	}
@@ -209,45 +215,45 @@ func (e *Engine) Apply(j *journal.Job) error {
 	case DecSkip:
 		return e.J.MarkDone(j.ID)
 	case DecFF:
-		return e.pushTarget(j, repo, g, in, false)
+		return e.pushTarget(ctx, j, repo, g, in, false)
 	case DecFanout:
-		return e.pushTarget(j, repo, g, fj, true)
+		return e.pushTarget(ctx, j, repo, g, fj, true)
 	case DecMerge:
 		if IsTag(j.Ref) {
 			return e.J.MarkFailed(j.ID, "refusing to move tag")
 		}
-		sha, conflict, err := g.Merge(fj, in, MergeMsg(j.Source, in))
+		sha, conflict, err := g.Merge(ctx, fj, in, MergeMsg(j.Source, in))
 		if err != nil {
 			return err
 		}
 		if !conflict {
-			return e.pushTarget(j, repo, g, sha, true)
+			return e.pushTarget(ctx, j, repo, g, sha, true)
 		}
-		return e.openConflictPR(j, repo, g, fj, in)
+		return e.openConflictPR(ctx, j, repo, g, fj, in)
 	default:
 		return fmt.Errorf("unknown decision %d", dec)
 	}
 }
 
-func (e *Engine) blockedResolved(g Git, fj string, blk *journal.Block) (bool, error) {
+func (e *Engine) blockedResolved(ctx context.Context, g Git, fj string, blk *journal.Block) (bool, error) {
 	if fj == "" {
 		return false, nil
 	}
-	a, err := g.IsAncestor(blk.A, fj)
+	a, err := g.IsAncestor(ctx, blk.A, fj)
 	if err != nil {
 		return false, err
 	}
-	b, err := g.IsAncestor(blk.B, fj)
+	b, err := g.IsAncestor(ctx, blk.B, fj)
 	if err != nil {
 		return false, err
 	}
 	return a && b, nil
 }
 
-func (e *Engine) openConflictPR(j *journal.Job, repo config.Repo, g Git, fj, in string) error {
+func (e *Engine) openConflictPR(ctx context.Context, j *journal.Job, repo config.Repo, g Git, fj, in string) error {
 	br := ConflictBranch(j.Source, in)
 	headRef := "refs/heads/" + br
-	if err := g.Push("forgejo", headRef, in); err != nil {
+	if err := g.Push(ctx, "forgejo", headRef, in); err != nil {
 		return fmt.Errorf("push conflict branch: %w", err)
 	}
 	base := stringsTrimHeads(j.Ref)
@@ -269,7 +275,7 @@ func (e *Engine) openConflictPR(j *journal.Job, repo config.Repo, g Git, fj, in 
 	return e.J.MarkConflict(j.ID, fmt.Sprintf("pr %d", n))
 }
 
-func (e *Engine) pushTarget(j *journal.Job, repo config.Repo, g Git, target string, includeSource bool) error {
+func (e *Engine) pushTarget(ctx context.Context, j *journal.Job, repo config.Repo, g Git, target string, includeSource bool) error {
 	if target == "" {
 		return e.J.MarkDone(j.ID)
 	}
@@ -281,7 +287,7 @@ func (e *Engine) pushTarget(j *journal.Job, repo config.Repo, g Git, target stri
 			_ = e.J.MarkPushed(j.ID, remote)
 			continue
 		}
-		if err := g.Push(remote, j.Ref, target); err != nil {
+		if err := g.Push(ctx, remote, j.Ref, target); err != nil {
 			return fmt.Errorf("push %s: %w", remote, err)
 		}
 		if err := e.J.MarkPushed(j.ID, remote); err != nil {
@@ -289,24 +295,27 @@ func (e *Engine) pushTarget(j *journal.Job, repo config.Repo, g Git, target stri
 		}
 		e.Log.Info("pushed", "repo", j.Repo, "ref", j.Ref, "remote", remote, "sha", short(target))
 	}
+	if err := e.J.Remember(j.Repo, j.Ref, target); err != nil {
+		return err
+	}
 	return e.J.MarkDone(j.ID)
 }
 
-func (e *Engine) fetch(g Git, repo config.Repo, remote, ref string) error {
+func (e *Engine) fetch(ctx context.Context, g Git, repo config.Repo, remote, ref string) error {
 	if remote == "" || repo.RemoteURL(remote) == "" {
 		return nil
 	}
-	err := g.Fetch(remote, ref)
+	err := g.Fetch(ctx, remote, ref)
 	if errors.Is(err, gitops.ErrMissing) {
 		return nil
 	}
 	return err
 }
 
-func (e *Engine) Reconcile() {
+func (e *Engine) Reconcile(ctx context.Context) {
 	for _, repo := range e.Cfg.Repos {
 		g := e.NewGit(repo)
-		if err := g.Ensure(map[string]string{
+		if err := g.Ensure(ctx, map[string]string{
 			"forgejo": repo.Forgejo,
 			"github":  repo.GitHub,
 			"gitlawb": repo.GitLawb,
@@ -318,14 +327,13 @@ func (e *Engine) Reconcile() {
 			if repo.RemoteURL(remote) == "" {
 				continue
 			}
-			refs, err := g.LSRemote(remote, "refs/heads/*")
+			refs, err := g.LSRemote(ctx, remote, "refs/heads/*")
 			if err != nil {
 				e.Log.Error("ls-remote", "repo", repo.Name, "remote", remote, "err", err)
 				continue
 			}
 			for ref, sha := range refs {
-				_, _, err := e.J.Enqueue(repo.Name, ref, remote, sha)
-				if err != nil {
+				if err := e.Enqueue(hook.Event{Repo: repo.Name, Ref: ref, Source: remote, SHA: sha}); err != nil {
 					e.Log.Error("reconcile enqueue", "err", err)
 				}
 			}

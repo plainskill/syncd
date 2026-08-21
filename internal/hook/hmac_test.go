@@ -37,8 +37,8 @@ func TestForgejoAndGitLawbHex(t *testing.T) {
 }
 
 func TestSyncdSecret(t *testing.T) {
-	if !SyncdSecretOK("", "anything") {
-		t.Fatal("empty configured secret allows local post-receive")
+	if SyncdSecretOK("", "anything") || SyncdSecretOK("abc", "") {
+		t.Fatal("empty secret must fail closed")
 	}
 	if !SyncdSecretOK("abc", "abc") || SyncdSecretOK("abc", "nope") {
 		t.Fatal("shared secret")

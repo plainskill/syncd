@@ -48,9 +48,11 @@ func handle(source, header string, verify func(string, []byte, string) bool, enq
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-		} else if sec != "" && verify != nil && !verify(sec, body, r.Header.Get(header)) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
+		} else if verify != nil {
+			if sec == "" || !verify(sec, body, r.Header.Get(header)) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
 		if ev.Delete || ev.SHA == "" || ev.SHA == ZeroSHA {
 			w.WriteHeader(http.StatusNoContent)

@@ -29,8 +29,8 @@ func ForgejoSignatureOK(secret string, body []byte, header string) bool {
 }
 
 func SyncdSecretOK(secret, got string) bool {
-	if secret == "" {
-		return true
+	if secret == "" || got == "" {
+		return false
 	}
 	return hmac.Equal([]byte(secret), []byte(got))
 }

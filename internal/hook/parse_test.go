@@ -34,12 +34,12 @@ func TestParseDelete(t *testing.T) {
 }
 
 func TestParsePostReceive(t *testing.T) {
-	body := []byte(`{"source":"forgejo","repo":"LibreLoom/LibreServ","ref":"refs/heads/main","after":"abc"}`)
+	body := []byte(`{"source":"forgejo","repo":"LibreLoom/LibreServ","ref":"refs/heads/main","after":"abc","pusher":"syncd"}`)
 	ev, err := Parse("", body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ev.Source != "forgejo" || ev.Repo != "LibreLoom/LibreServ" || ev.SHA != "abc" {
+	if ev.Source != "forgejo" || ev.Repo != "LibreLoom/LibreServ" || ev.SHA != "abc" || ev.Pusher != "syncd" {
 		t.Fatalf("%+v", ev)
 	}
 }

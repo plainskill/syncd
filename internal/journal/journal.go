@@ -70,7 +70,18 @@ func Open(path string) (*DB, error) {
 }
 
 func migrate(db *sql.DB) error {
-	_, err := db.Exec(`
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY)`); err != nil {
+		return err
+	}
+	var v int
+	if err := db.QueryRow(`SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&v); err != nil {
+		return err
+	}
+	for _, step := range []struct {
+		version int
+		sql     string
+	}{
+		{1, `
 CREATE TABLE IF NOT EXISTS jobs (
   id INTEGER PRIMARY KEY,
   repo TEXT NOT NULL,
@@ -94,9 +105,26 @@ CREATE TABLE IF NOT EXISTS blocked (
   a TEXT NOT NULL,
   b TEXT NOT NULL,
   PRIMARY KEY (repo, ref)
-);
-`)
-	return err
+);`},
+		{2, `
+CREATE TABLE IF NOT EXISTS seen (
+  repo TEXT NOT NULL,
+  ref TEXT NOT NULL,
+  sha TEXT NOT NULL,
+  PRIMARY KEY (repo, ref, sha)
+);`},
+	} {
+		if v >= step.version {
+			continue
+		}
+		if _, err := db.Exec(step.sql); err != nil {
+			return fmt.Errorf("migrate to v%d: %w", step.version, err)
+		}
+		if _, err := db.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, step.version); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DB) Close() error { return d.sql.Close() }
@@ -105,6 +133,13 @@ func (d *DB) Close() error { return d.sql.Close() }
 // or a done job already recorded this repo/ref/sha from any source.
 func (d *DB) Enqueue(repo, ref, source, sha string) (job *Job, already bool, err error) {
 	if sha == "" {
+		return nil, true, nil
+	}
+	seen, err := d.Seen(repo, ref, sha)
+	if err != nil {
+		return nil, false, err
+	}
+	if seen {
 		return nil, true, nil
 	}
 	var n int
@@ -198,8 +233,32 @@ func (d *DB) MarkPushed(id int64, remote string) error {
 }
 
 func (d *DB) MarkDone(id int64) error {
-	_, err := d.sql.Exec(`UPDATE jobs SET state=? WHERE id=?`, StateDone, id)
+	j, err := d.Get(id)
+	if err != nil {
+		return err
+	}
+	if err := d.Remember(j.Repo, j.Ref, j.SHA); err != nil {
+		return err
+	}
+	_, err = d.sql.Exec(`UPDATE jobs SET state=? WHERE id=?`, StateDone, id)
 	return err
+}
+
+func (d *DB) Remember(repo, ref, sha string) error {
+	if sha == "" {
+		return nil
+	}
+	_, err := d.sql.Exec(`INSERT OR IGNORE INTO seen (repo, ref, sha) VALUES (?,?,?)`, repo, ref, sha)
+	return err
+}
+
+func (d *DB) Seen(repo, ref, sha string) (bool, error) {
+	if sha == "" {
+		return false, nil
+	}
+	var n int
+	err := d.sql.QueryRow(`SELECT COUNT(*) FROM seen WHERE repo=? AND ref=? AND sha=?`, repo, ref, sha).Scan(&n)
+	return n > 0, err
 }
 
 func (d *DB) MarkConflict(id int64, msg string) error {

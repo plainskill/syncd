@@ -53,3 +53,20 @@ func TestMuxHealth(t *testing.T) {
 		t.Fatalf("code %d", rec.Code)
 	}
 }
+
+func TestMuxRejectsEmptySecret(t *testing.T) {
+	body := []byte(`{"source":"forgejo","repo":"o/r","ref":"refs/heads/main","after":"abc"}`)
+	mux := Mux(func(Event) error { return nil }, func(string, string) string { return "" }, nil)
+	req := httptest.NewRequest(http.MethodPost, "/hook", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401 got %d", rec.Code)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/hook/github", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("github empty secret want 401 got %d", rec.Code)
+	}
+}

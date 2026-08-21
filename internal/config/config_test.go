@@ -41,6 +41,9 @@ repos:
 	if cfg.Repos[0].Secrets.GitHub != "ghsec" {
 		t.Fatalf("secret not expanded")
 	}
+	if cfg.GitTimeout != 60*time.Second {
+		t.Fatalf("git timeout: %s", cfg.GitTimeout)
+	}
 	if cfg.Repos[0].DefaultRef() != "refs/heads/main" {
 		t.Fatalf("default ref: %s", cfg.Repos[0].DefaultRef())
 	}

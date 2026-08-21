@@ -41,6 +41,17 @@ func TestNextIncompleteOrderAndAttempts(t *testing.T) {
 	}
 }
 
+func TestRememberSkipsFanoutTarget(t *testing.T) {
+	db := openT(t)
+	if err := db.Remember("o/r", "refs/heads/main", "mmm"); err != nil {
+		t.Fatal(err)
+	}
+	_, already, err := db.Enqueue("o/r", "refs/heads/main", "forgejo", "mmm")
+	if err != nil || !already {
+		t.Fatalf("seen target sha should skip, already=%v err=%v", already, err)
+	}
+}
+
 func TestBlockRoundTrip(t *testing.T) {
 	db := openT(t)
 	if err := db.Block("o/r", "refs/heads/main", 12, "aaa", "bbb"); err != nil {

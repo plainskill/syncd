@@ -15,6 +15,7 @@ type Config struct {
 	SQLite         string        `yaml:"sqlite"`
 	ReconcileEvery time.Duration `yaml:"reconcile_every"`
 	MaxAttempts    int           `yaml:"max_attempts"`
+	GitTimeout     time.Duration `yaml:"git_timeout"`
 	Bot            Bot           `yaml:"bot"`
 	Repos          []Repo        `yaml:"repos"`
 }
@@ -70,6 +71,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.MaxAttempts <= 0 {
 		c.MaxAttempts = 8
+	}
+	if c.GitTimeout <= 0 {
+		c.GitTimeout = 60 * time.Second
 	}
 	if c.Bot.Name == "" {
 		c.Bot.Name = "syncd"

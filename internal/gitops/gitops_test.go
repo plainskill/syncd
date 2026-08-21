@@ -1,14 +1,17 @@
 package gitops
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFFMergeAndConflict(t *testing.T) {
+	ctx := context.Background()
 	root := t.TempDir()
 	aWT := filepath.Join(root, "a")
 	bWT := filepath.Join(root, "b")
@@ -19,7 +22,7 @@ func TestFFMergeAndConflict(t *testing.T) {
 	run(t, root, "git", "clone", filepath.Join(root, "a.git"), bWT)
 
 	hub := New(filepath.Join(root, "hub.git"), filepath.Join(root, "wt"), "syncd", "syncd@localhost")
-	if err := hub.Ensure(map[string]string{
+	if err := hub.Ensure(ctx, map[string]string{
 		"github":  filepath.Join(root, "a.git"),
 		"forgejo": filepath.Join(root, "b.git"),
 	}); err != nil {
@@ -29,19 +32,19 @@ func TestFFMergeAndConflict(t *testing.T) {
 	// FF: extra commit on github (a)
 	writeCommit(t, aWT, "readme", "hello\nff\n", "ff")
 	run(t, aWT, "git", "push", filepath.Join(root, "a.git"), "HEAD:refs/heads/main")
-	if err := hub.Fetch("github", "refs/heads/main"); err != nil {
+	if err := hub.Fetch(ctx, "github", "refs/heads/main"); err != nil {
 		t.Fatal(err)
 	}
-	if err := hub.Fetch("forgejo", "refs/heads/main"); err != nil {
+	if err := hub.Fetch(ctx, "forgejo", "refs/heads/main"); err != nil {
 		t.Fatal(err)
 	}
-	gh, _ := hub.SHA("github", "refs/heads/main")
-	fj, _ := hub.SHA("forgejo", "refs/heads/main")
-	anc, err := hub.IsAncestor(fj, gh)
+	gh, _ := hub.SHA(ctx, "github", "refs/heads/main")
+	fj, _ := hub.SHA(ctx, "forgejo", "refs/heads/main")
+	anc, err := hub.IsAncestor(ctx, fj, gh)
 	if err != nil || !anc {
 		t.Fatalf("expected ff ancestry anc=%v err=%v", anc, err)
 	}
-	if err := hub.Push("forgejo", "refs/heads/main", gh); err != nil {
+	if err := hub.Push(ctx, "forgejo", "refs/heads/main", gh); err != nil {
 		t.Fatal(err)
 	}
 	run(t, bWT, "git", "pull", "--ff-only")
@@ -51,15 +54,15 @@ func TestFFMergeAndConflict(t *testing.T) {
 	run(t, aWT, "git", "push", filepath.Join(root, "a.git"), "HEAD:refs/heads/main")
 	writeCommit(t, bWT, "only-b", "B\n", "cb")
 	run(t, bWT, "git", "push", filepath.Join(root, "b.git"), "HEAD:refs/heads/main")
-	if err := hub.Fetch("github", "refs/heads/main"); err != nil {
+	if err := hub.Fetch(ctx, "github", "refs/heads/main"); err != nil {
 		t.Fatal(err)
 	}
-	if err := hub.Fetch("forgejo", "refs/heads/main"); err != nil {
+	if err := hub.Fetch(ctx, "forgejo", "refs/heads/main"); err != nil {
 		t.Fatal(err)
 	}
-	gh, _ = hub.SHA("github", "refs/heads/main")
-	fj, _ = hub.SHA("forgejo", "refs/heads/main")
-	sha, conflict, err := hub.Merge(fj, gh, "sync: merge github into main")
+	gh, _ = hub.SHA(ctx, "github", "refs/heads/main")
+	fj, _ = hub.SHA(ctx, "forgejo", "refs/heads/main")
+	sha, conflict, err := hub.Merge(ctx, fj, gh, "sync: merge github into main")
 	if err != nil || conflict || sha == "" {
 		t.Fatalf("mergeable: sha=%s conflict=%v err=%v", sha, conflict, err)
 	}
@@ -78,22 +81,40 @@ func TestFFMergeAndConflict(t *testing.T) {
 	writeCommit(t, y, "f", "right\n", "right")
 	run(t, y, "git", "push", filepath.Join(root2, "y.git"), "HEAD:refs/heads/main")
 	hub2 := New(filepath.Join(root2, "hub.git"), filepath.Join(root2, "wt"), "syncd", "syncd@localhost")
-	if err := hub2.Ensure(map[string]string{
+	if err := hub2.Ensure(ctx, map[string]string{
 		"github":  filepath.Join(root2, "x.git"),
 		"forgejo": filepath.Join(root2, "y.git"),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_ = hub2.Fetch("github", "refs/heads/main")
-	_ = hub2.Fetch("forgejo", "refs/heads/main")
-	gh, _ = hub2.SHA("github", "refs/heads/main")
-	fj, _ = hub2.SHA("forgejo", "refs/heads/main")
-	_, conflict, err = hub2.Merge(fj, gh, "sync")
+	_ = hub2.Fetch(ctx, "github", "refs/heads/main")
+	_ = hub2.Fetch(ctx, "forgejo", "refs/heads/main")
+	gh, _ = hub2.SHA(ctx, "github", "refs/heads/main")
+	fj, _ = hub2.SHA(ctx, "forgejo", "refs/heads/main")
+	_, conflict, err = hub2.Merge(ctx, fj, gh, "sync")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !conflict {
 		t.Fatal("expected content conflict")
+	}
+}
+
+func TestGitOpTimeout(t *testing.T) {
+	dir := t.TempDir()
+	initRepo(t, filepath.Join(dir, "src"))
+	writeCommit(t, filepath.Join(dir, "src"), "f", "x\n", "c")
+	hub := New(filepath.Join(dir, "hub.git"), filepath.Join(dir, "wt"), "syncd", "syncd@localhost")
+	hub.Timeout = 200 * time.Millisecond
+	if err := hub.Ensure(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	_, err := hub.git(context.Background(), "", "-c", "alias.hang=!sleep 5", "hang")
+	if err == nil {
+		t.Fatal("expected timeout")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") && !strings.Contains(err.Error(), "killed") {
+		t.Fatalf("want timeout, got %v", err)
 	}
 }
 

@@ -1,6 +1,7 @@
 package fanout
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -16,34 +17,34 @@ type fakeGit struct {
 	mergeSHA string
 }
 
-func (f *fakeGit) Ensure(map[string]string) error { return nil }
-func (f *fakeGit) Fetch(string, string) error     { return nil }
-func (f *fakeGit) SHA(remote, _ string) (string, error) {
+func (f *fakeGit) Ensure(context.Context, map[string]string) error { return nil }
+func (f *fakeGit) Fetch(context.Context, string, string) error     { return nil }
+func (f *fakeGit) SHA(_ context.Context, remote, _ string) (string, error) {
 	return f.sha[remote], nil
 }
-func (f *fakeGit) IsAncestor(a, b string) (bool, error) {
+func (f *fakeGit) IsAncestor(_ context.Context, a, b string) (bool, error) {
 	if a == "" || b == "" {
 		return false, nil
 	}
 	if a == b {
 		return true, nil
 	}
-	// linear chain encoded as map "child":"parent" using sha values github/forgejo only
-	// tests set ancestry via suffix: we treat known pairs.
 	if f.sha["anc:"+a+">"+b] == "1" {
 		return true, nil
 	}
 	return false, nil
 }
-func (f *fakeGit) Merge(_, _ string, _ string) (string, bool, error) {
+func (f *fakeGit) Merge(context.Context, string, string, string) (string, bool, error) {
 	return f.mergeSHA, f.conflict, nil
 }
-func (f *fakeGit) Push(remote, ref, sha string) error {
+func (f *fakeGit) Push(_ context.Context, remote, ref, sha string) error {
 	f.pushes = append(f.pushes, remote+" "+ref+" "+sha)
 	f.sha[remote] = sha
 	return nil
 }
-func (f *fakeGit) LSRemote(string, string) (map[string]string, error) { return nil, nil }
+func (f *fakeGit) LSRemote(context.Context, string, string) (map[string]string, error) {
+	return nil, nil
+}
 
 type fakePR struct{ n int }
 
@@ -98,7 +99,7 @@ func TestApplyFFGitHubToForgejoThenGitLawb(t *testing.T) {
 	if err != nil || already {
 		t.Fatalf("enqueue %v %v", already, err)
 	}
-	if err := e.Apply(j); err != nil {
+	if err := e.Apply(context.Background(), j); err != nil {
 		t.Fatal(err)
 	}
 	if len(g.pushes) < 2 || g.pushes[0] != "forgejo refs/heads/main bbb" || g.pushes[1] != "gitlawb refs/heads/main bbb" {
@@ -118,7 +119,7 @@ func TestApplyConflictOpensPR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Apply(j); err != nil {
+	if err := e.Apply(context.Background(), j); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := db.Get(j.ID)
@@ -141,10 +142,14 @@ func TestApplyMergeableDivergence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Apply(j); err != nil {
+	if err := e.Apply(context.Background(), j); err != nil {
 		t.Fatal(err)
 	}
 	if g.pushes[0] != "forgejo refs/heads/main mmm" {
 		t.Fatalf("first push should be merge onto fj: %v", g.pushes)
+	}
+	_, already, err := db.Enqueue("o/r", "refs/heads/main", "forgejo", "mmm")
+	if err != nil || !already {
+		t.Fatalf("forgejo echo of merge sha should be seen, already=%v err=%v", already, err)
 	}
 }

@@ -7,11 +7,13 @@ Wants=network-online.target
 Type=simple
 User=git
 Group=git
+UMask=0077
 WorkingDirectory=/var/lib/syncd
+# /etc/syncd.yaml holds a Forgejo write token and hook secrets.
+ExecStartPre=/usr/bin/chmod 0600 /etc/syncd.yaml
 ExecStart=/usr/local/bin/syncd -config /etc/syncd.yaml
 Restart=always
 RestartSec=2
-# One instance. Two syncd processes will race the hub.
 TimeoutStopSec=30
 
 [Install]
