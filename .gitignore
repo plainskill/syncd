@@ -1,0 +1,12 @@
+/syncd
+/syncd.test
+/coverage.out
+config.yaml
+*.db
+*.db-wal
+*.db-shm
+/data
+/hubs
+.worktrees
+.env
+.env.*

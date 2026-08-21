@@ -1,0 +1,18 @@
+[Unit]
+Description=syncd git object hub (Forgejo / GitHub / GitLawb)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=git
+Group=git
+WorkingDirectory=/var/lib/syncd
+ExecStart=/usr/local/bin/syncd -config /etc/syncd.yaml
+Restart=always
+RestartSec=2
+# One instance. Two syncd processes will race the hub.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

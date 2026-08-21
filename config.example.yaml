@@ -1,0 +1,26 @@
+listen: "127.0.0.1:7744"
+hub_root: /var/lib/syncd/hubs
+sqlite: /var/lib/syncd/syncd.db
+reconcile_every: 5m
+max_attempts: 8
+
+# Identity used for merge commits and echo suppression.
+bot:
+  name: syncd
+  email: syncd@localhost
+  github: libreserv-sync[bot]
+  forgejo: syncd
+  gitlawb: "" # DID the daemon pushes as, if known
+
+repos:
+  - name: LibreLoom/LibreServ
+    default_branch: main
+    forgejo: ssh://git@gt.plainskill.net:2222/LibreLoom/LibreServ.git
+    github: git@github.com:LibreLoom/LibreServ.git
+    gitlawb: "" # gitlawb://… or https://node…/owner/repo.git
+    forgejo_api: https://gt.plainskill.net
+    forgejo_token: ${FORGEJO_TOKEN}
+    secrets:
+      github: ${GITHUB_HOOK_SECRET}
+      forgejo: ${FJ_HOOK_SECRET}
+      gitlawb: ${GITLAWB_HOOK_SECRET}
