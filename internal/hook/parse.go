@@ -12,6 +12,7 @@ type Event struct {
 	Ref    string
 	Source string
 	SHA    string
+	Before string
 	Pusher string
 	Delete bool
 }
@@ -21,6 +22,7 @@ type pushPayload struct {
 	After      string `json:"after"`
 	Before     string `json:"before"`
 	Deleted    bool   `json:"deleted"`
+	RefType    string `json:"ref_type"`
 	Source     string `json:"source"`
 	Repo       string `json:"repo"`
 	Pusher     any    `json:"pusher"`
@@ -45,12 +47,24 @@ func Parse(source string, body []byte) (Event, error) {
 		Source: source,
 		Ref:    p.Ref,
 		SHA:    strings.ToLower(strings.TrimSpace(p.After)),
+		Before: strings.ToLower(strings.TrimSpace(p.Before)),
 		Delete: p.Deleted || isZero(p.After),
 		Pusher: firstNonEmpty(
 			actorLogin(p.Pusher),
 			actorLogin(p.Sender),
 			actorLogin(p.Actor),
 		),
+	}
+	// Forgejo/Gitea "delete" events carry a bare branch name plus ref_type.
+	if p.RefType != "" && !strings.HasPrefix(ev.Ref, "refs/") {
+		switch p.RefType {
+		case "branch":
+			ev.Ref = "refs/heads/" + ev.Ref
+		case "tag":
+			ev.Ref = "refs/tags/" + ev.Ref
+		}
+		ev.Delete = true
+		ev.SHA = ""
 	}
 	if p.Source != "" && ev.Source == "" {
 		ev.Source = p.Source

@@ -25,6 +25,7 @@ type Git interface {
 	Merge(ctx context.Context, ours, theirs, msg string) (sha string, conflict bool, err error)
 	Push(ctx context.Context, remote, ref, sha string) error
 	LSRemote(ctx context.Context, remote, glob string) (map[string]string, error)
+	DeleteRef(ctx context.Context, remote, ref string) error
 }
 
 type PRs interface {
@@ -79,6 +80,10 @@ func (e *Engine) Enqueue(ev hook.Event) error {
 	}
 	if _, ok := e.Cfg.Repo(ev.Repo); !ok {
 		e.Log.Info("skip unknown repo", "repo", ev.Repo)
+		return nil
+	}
+	if ev.Delete {
+		go e.Delete(context.Background(), ev)
 		return nil
 	}
 	_, already, err := e.J.Enqueue(ev.Repo, ev.Ref, ev.Source, ev.SHA)
@@ -233,6 +238,71 @@ func (e *Engine) Apply(ctx context.Context, j *journal.Job) error {
 	default:
 		return fmt.Errorf("unknown decision %d", dec)
 	}
+}
+
+// Delete mirrors a branch deletion to the other remotes. Only refs/heads/* are
+// mirrored; the default branch and sync/* conflict branches are never deleted.
+// A remote is skipped when its tip no longer matches the SHA that was deleted.
+func (e *Engine) Delete(ctx context.Context, ev hook.Event) {
+	if !ShouldMirrorDelete(ev.Ref, e.defaultBranch(ev.Repo)) {
+		e.Log.Info("skip delete", "repo", ev.Repo, "ref", ev.Ref, "source", ev.Source)
+		return
+	}
+	unlock := e.lockRef(ev.Repo, ev.Ref)
+	defer unlock()
+
+	repo, ok := e.Cfg.Repo(ev.Repo)
+	if !ok {
+		return
+	}
+	if blk, err := e.J.Blocked(ev.Repo, ev.Ref); err == nil && blk != nil {
+		e.Log.Info("skip delete, blocked on conflict pr", "repo", ev.Repo, "ref", ev.Ref, "pr", blk.PR)
+		return
+	}
+	g := e.NewGit(repo)
+	if err := g.Ensure(ctx, map[string]string{
+		"forgejo": repo.Forgejo,
+		"github":  repo.GitHub,
+		"gitlawb": repo.GitLawb,
+	}); err != nil {
+		e.Log.Error("delete ensure", "repo", ev.Repo, "err", err)
+		return
+	}
+	before := ev.Before
+	if before == hook.ZeroSHA {
+		before = ""
+	}
+	for _, remote := range PushOrder(ev.Source, false) {
+		if repo.RemoteURL(remote) == "" {
+			continue
+		}
+		if err := g.Fetch(ctx, remote, ev.Ref); err != nil {
+			if !errors.Is(err, gitops.ErrMissing) {
+				e.Log.Error("delete fetch", "repo", ev.Repo, "ref", ev.Ref, "remote", remote, "err", err)
+			}
+			continue
+		}
+		cur, _ := g.SHA(ctx, remote, ev.Ref)
+		if cur == "" {
+			continue
+		}
+		if before != "" && cur != before {
+			e.Log.Info("skip delete, remote moved", "repo", ev.Repo, "ref", ev.Ref, "remote", remote, "have", short(cur), "want", short(before))
+			continue
+		}
+		if err := g.DeleteRef(ctx, remote, ev.Ref); err != nil {
+			e.Log.Error("delete", "repo", ev.Repo, "ref", ev.Ref, "remote", remote, "err", err)
+			continue
+		}
+		e.Log.Info("deleted", "repo", ev.Repo, "ref", ev.Ref, "remote", remote, "source", ev.Source)
+	}
+}
+
+func (e *Engine) defaultBranch(name string) string {
+	if r, ok := e.Cfg.Repo(name); ok && r.DefaultBranch != "" {
+		return r.DefaultBranch
+	}
+	return "main"
 }
 
 func (e *Engine) blockedResolved(ctx context.Context, g Git, fj string, blk *journal.Block) (bool, error) {

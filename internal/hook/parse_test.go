@@ -33,6 +33,17 @@ func TestParseDelete(t *testing.T) {
 	}
 }
 
+func TestParseForgejoDeleteEvent(t *testing.T) {
+	body := []byte(`{"ref":"feat/x","ref_type":"branch","pusher_type":"user","repository":{"full_name":"o/r"},"sender":{"login":"max"}}`)
+	ev, err := Parse("forgejo", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ev.Delete || ev.Ref != "refs/heads/feat/x" || ev.Repo != "o/r" || ev.Pusher != "max" {
+		t.Fatalf("%+v", ev)
+	}
+}
+
 func TestParsePostReceive(t *testing.T) {
 	body := []byte(`{"source":"forgejo","repo":"LibreLoom/LibreServ","ref":"refs/heads/main","after":"abc","pusher":"syncd"}`)
 	ev, err := Parse("", body)

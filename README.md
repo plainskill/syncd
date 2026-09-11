@@ -13,7 +13,7 @@ Pushes are journaled, then applied **one ref at a time**. GitHub → Forgejo →
 | Diverged, clean merge | Merge commit (no rebase, no squash), land on Forgejo, fan out. |
 | Content conflict | Push `sync/<source>/<sha>` to Forgejo and open a PR. Do not move `main`. After that PR is **merge-committed**, fan out the result. |
 | Own bot echo / already-seen SHA | Drop. Fan-out target SHAs are recorded so Forgejo post-receive of a merge commit does not re-push. |
-| Deleted ref | Ignore (no mirror deletes). |
+| Deleted branch | Delete on the other remotes, but only where their tip still equals the deleted SHA. Never the default branch, `sync/*`, or tags. Webhook-driven only (reconcile does not delete). |
 
 A 5-minute `ls-remote` reconcile catches missed webhooks (same enqueue path as HTTP). SQLite + `fsync` is the crash log: the Forgejo `post-receive` hook returns as soon as the row is journaled. Git fetch/push/ls-remote have a 60s deadline; a hung remote fails that job and the queue continues.
 

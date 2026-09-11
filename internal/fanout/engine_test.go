@@ -13,6 +13,7 @@ import (
 type fakeGit struct {
 	sha      map[string]string
 	pushes   []string
+	deletes  []string
 	conflict bool
 	mergeSHA string
 }
@@ -44,6 +45,40 @@ func (f *fakeGit) Push(_ context.Context, remote, ref, sha string) error {
 }
 func (f *fakeGit) LSRemote(context.Context, string, string) (map[string]string, error) {
 	return nil, nil
+}
+func (f *fakeGit) DeleteRef(_ context.Context, remote, ref string) error {
+	f.deletes = append(f.deletes, remote+" "+ref)
+	delete(f.sha, remote)
+	return nil
+}
+
+func TestDeleteMirrorsBranch(t *testing.T) {
+	g := &fakeGit{sha: map[string]string{"forgejo": "aaa", "gitlawb": "aaa"}}
+	e, _ := testEngine(t, g, &fakePR{})
+	e.Delete(context.Background(), hook.Event{Repo: "o/r", Ref: "refs/heads/feat", Source: "github", Before: "aaa", Delete: true})
+	if len(g.deletes) != 2 || g.deletes[0] != "forgejo refs/heads/feat" || g.deletes[1] != "gitlawb refs/heads/feat" {
+		t.Fatalf("deletes %v", g.deletes)
+	}
+}
+
+func TestDeleteSkipsMovedRemote(t *testing.T) {
+	g := &fakeGit{sha: map[string]string{"forgejo": "bbb", "gitlawb": "aaa"}}
+	e, _ := testEngine(t, g, &fakePR{})
+	e.Delete(context.Background(), hook.Event{Repo: "o/r", Ref: "refs/heads/feat", Source: "github", Before: "aaa", Delete: true})
+	if len(g.deletes) != 1 || g.deletes[0] != "gitlawb refs/heads/feat" {
+		t.Fatalf("deletes %v", g.deletes)
+	}
+}
+
+func TestDeleteProtectsRefs(t *testing.T) {
+	for _, ref := range []string{"refs/heads/main", "refs/heads/sync/github/abc1234", "refs/tags/v1"} {
+		g := &fakeGit{sha: map[string]string{"forgejo": "aaa"}}
+		e, _ := testEngine(t, g, &fakePR{})
+		e.Delete(context.Background(), hook.Event{Repo: "o/r", Ref: ref, Source: "github", Before: "aaa", Delete: true})
+		if len(g.deletes) != 0 {
+			t.Fatalf("%s: deletes %v", ref, g.deletes)
+		}
+	}
 }
 
 type fakePR struct{ n int }

@@ -60,6 +60,20 @@ func ConflictBranch(source, sha string) string {
 	return "sync/" + src + "/" + short
 }
 
+func ShouldMirrorDelete(ref, defaultBranch string) bool {
+	br, ok := strings.CutPrefix(ref, "refs/heads/")
+	if !ok || br == "" {
+		return false
+	}
+	if br == defaultBranch || br == "main" || br == "master" {
+		return false
+	}
+	if strings.HasPrefix(br, "sync/") {
+		return false
+	}
+	return true
+}
+
 func IsTag(ref string) bool {
 	return strings.HasPrefix(ref, "refs/tags/")
 }

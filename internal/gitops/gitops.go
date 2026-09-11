@@ -144,6 +144,18 @@ func (r *Repo) Push(ctx context.Context, remote, ref, sha string) error {
 	return err
 }
 
+func (r *Repo) DeleteRef(ctx context.Context, remote, ref string) error {
+	if remote == "" || ref == "" {
+		return fmt.Errorf("delete: missing remote/ref")
+	}
+	_, err := r.git(ctx, "", "push", remote, ":"+ref)
+	if err != nil && !isMissingRef(err) {
+		return err
+	}
+	_, _ = r.git(ctx, "", "update-ref", "-d", tracking(remote, ref))
+	return nil
+}
+
 func (r *Repo) LSRemote(ctx context.Context, remote, glob string) (map[string]string, error) {
 	if glob == "" {
 		glob = "refs/heads/*"

@@ -55,8 +55,8 @@ func handle(source, header string, verify func(string, []byte, string) bool, enq
 			}
 		}
 		if ev.Delete || ev.SHA == "" || ev.SHA == ZeroSHA {
-			w.WriteHeader(http.StatusNoContent)
-			return
+			ev.Delete = true
+			ev.SHA = ""
 		}
 		if ev.Repo == "" || ev.Ref == "" {
 			http.Error(w, "missing repo/ref", http.StatusBadRequest)
